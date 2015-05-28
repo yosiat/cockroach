@@ -747,11 +747,14 @@ func (s *Store) Bootstrap(ident proto.StoreIdent, stopper *util.Stopper) error {
 
 // GetRange fetches a range by Raft ID. Returns an error if no range is found.
 func (s *Store) GetRange(raftID int64) (*Range, error) {
+	//	log.Warningf("TOBIAS GetRange %d", raftID)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if rng, ok := s.ranges[raftID]; ok {
 		return rng, nil
 	}
+	log.Warningf("TOBIAS GetRange %d failed:\n\n %+v\n\n%+v", raftID, s.ranges, s.rangesByKey)
+	// log.Warningf("TOBIAS GetRange %s", debug.Stack())
 	return nil, proto.NewRangeNotFoundError(raftID)
 }
 
@@ -761,6 +764,7 @@ func (s *Store) GetRange(raftID int64) (*Range, error) {
 // using Key.Address() to ensure we lookup ranges correctly for local
 // keys. When end is nil, a range that contains start is looked up.
 func (s *Store) LookupRange(start, end proto.Key) *Range {
+	log.Warningf("TOBIAS LookupRange %s-%s", start, end)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	startAddr := keys.KeyAddress(start)
@@ -913,6 +917,7 @@ func (s *Store) EventFeed() StoreEventFeed { return s.feed }
 // keys and the supplied proto.Replicas slice. It allocates new Raft
 // and range IDs to fill out the supplied replicas.
 func (s *Store) NewRangeDescriptor(start, end proto.Key, replicas []proto.Replica) (*proto.RangeDescriptor, error) {
+	log.Warningf("NewRangeDescriptor")
 	id, err := s.raftIDAlloc.Allocate()
 	if err != nil {
 		return nil, err
@@ -930,6 +935,7 @@ func (s *Store) NewRangeDescriptor(start, end proto.Key, replicas []proto.Replic
 // range. The new range is added to the ranges map and the rangesByKey
 // sorted slice.
 func (s *Store) SplitRange(origRng, newRng *Range) error {
+	log.Warningf("SplitRange")
 	if !bytes.Equal(origRng.Desc().EndKey, newRng.Desc().EndKey) ||
 		bytes.Compare(origRng.Desc().StartKey, newRng.Desc().StartKey) >= 0 {
 		return util.Errorf("orig range is not splittable by new range: %+v, %+v", origRng.Desc(), newRng.Desc())
@@ -1006,7 +1012,9 @@ func (s *Store) AddRange(rng *Range) error {
 // allow many ranges to be added and the sort only invoked once. This method
 // presupposes the store's lock is held. Returns a rangeAlreadyExists error if
 // a range with the same Raft ID has already been added to this store.
+// Assumes the mutex is being held.
 func (s *Store) addRangeInternal(rng *Range, resort bool) error {
+	log.Warningf("TOBIAS addRangeInternal")
 	if !rng.isInitialized() {
 		return util.Errorf("attempted to add uninitialized range %s", rng)
 	}
@@ -1024,7 +1032,9 @@ func (s *Store) addRangeInternal(rng *Range, resort bool) error {
 }
 
 // addRangeToRangeMap adds the range to the ranges map.
+// Assumes the mutex is being held.
 func (s *Store) addRangeToRangeMap(rng *Range) error {
+	log.Warningf("TOBIAS addRangeToRangeMap")
 	if exRng, ok := s.ranges[rng.Desc().RaftID]; ok {
 		return &rangeAlreadyExists{exRng}
 	}
@@ -1035,6 +1045,7 @@ func (s *Store) addRangeToRangeMap(rng *Range) error {
 // RemoveRange removes the range from the store's range map and from
 // the sorted rangesByKey slice.
 func (s *Store) RemoveRange(rng *Range) error {
+	log.Warningf("Tobias RemoveRange")
 	// RemoveGroup needs to access the storage, which in turn needs the
 	// lock. Some care is needed to avoid deadlocks.
 	if err := s.multiraft.RemoveGroup(uint64(rng.Desc().RaftID)); err != nil {
@@ -1062,6 +1073,7 @@ func (s *Store) RemoveRange(rng *Range) error {
 // processRangeDescriptorUpdate is called whenever a range's
 // descriptor is updated.
 func (s *Store) processRangeDescriptorUpdate(rng *Range) error {
+	log.Warningf("TOBIAS processRangeDescriptorUpdate")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1164,12 +1176,13 @@ func (s *Store) ExecuteCmd(ctx context.Context, call client.Call) error {
 		if wiErr, ok := err.(*proto.WriteIntentError); ok {
 			// If inconsistent, return results and resolve asynchronously.
 			if header.ReadConsistency == proto.INCONSISTENT && s.stopper.StartTask() {
-				go func() {
-					if err := s.resolveWriteIntentError(ctx, wiErr, rng, args, proto.CLEANUP_TXN, true); err != nil {
-						log.Warningc(ctx, "failed to resolve on inconsistent read: %s", err)
-					}
-					s.stopper.FinishTask()
-				}()
+				//go func() {
+				//	if err := s.resolveWriteIntentError(ctx, wiErr, rng, args, proto.CLEANUP_TXN, true); err != nil {
+				//		log.Warningc(ctx, "failed to resolve on inconsistent read: %s", err)
+				//	}
+				//	s.stopper.FinishTask()
+				//}()
+				//log.Warningf("TOBIAS not resolving async for %s", header)
 				reply.Header().Error = nil
 				return retry.Break, nil
 			}

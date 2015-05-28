@@ -82,6 +82,7 @@ func NewIDAllocator(idKey proto.Key, db *client.KV, minID int64, blockSize int64
 func (ia *IDAllocator) Allocate() (int64, error) {
 	for {
 		id := <-ia.ids
+		log.Warningf("TOBIAS Allocate %d", id)
 		if id == allocationTrigger {
 			if !ia.stopper.StartTask() {
 				if atomic.CompareAndSwapInt32(&ia.closed, 0, 1) {

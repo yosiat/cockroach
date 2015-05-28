@@ -195,6 +195,7 @@ func (r *Range) Scan(batch engine.Engine, args *proto.ScanRequest, reply *proto.
 // EndTransaction either commits or aborts (rolls back) an extant
 // transaction according to the args.Commit parameter.
 func (r *Range) EndTransaction(batch engine.Engine, ms *proto.MVCCStats, args *proto.EndTransactionRequest, reply *proto.EndTransactionResponse) {
+	log.Warningf("TOBIAS EndTransaction %+v", args)
 	if args.Txn == nil {
 		reply.SetGoError(util.Errorf("no transaction specified to EndTransaction"))
 		return
@@ -787,6 +788,8 @@ func (r *Range) AdminSplit(args *proto.AdminSplitRequest, reply *proto.AdminSpli
 	// Only allow a single split per range at a time.
 	r.metaLock.Lock()
 	defer r.metaLock.Unlock()
+	log.Warningf("TOBIAS AdminSplit %+v", args)
+	defer log.Warningf("TOBIAS AdminSplit return")
 
 	// Determine split key if not provided with args. This scan is
 	// allowed to be relatively slow because admin commands don't block
@@ -853,6 +856,7 @@ func (r *Range) AdminSplit(args *proto.AdminSplitRequest, reply *proto.AdminSpli
 			return err
 		}
 		// Update the RangeTree.
+		// TODO(tschottdorf)
 		if err := InsertRange(txn, newDesc.StartKey); err != nil {
 			return err
 		}
@@ -882,7 +886,14 @@ func (r *Range) AdminSplit(args *proto.AdminSplitRequest, reply *proto.AdminSpli
 // transaction. It copies the response cache for the new range and
 // recomputes stats for both the existing, updated range and the new
 // range.
-func (r *Range) splitTrigger(batch engine.Engine, split *proto.SplitTrigger) error {
+func (r *Range) splitTrigger(batch engine.Engine, split *proto.SplitTrigger) (err error) {
+	defer func() {
+		log.Warningf("TOBIAS splitTrigger return")
+		if err != nil {
+			panic(fmt.Sprintf("%s", err))
+		}
+	}()
+	log.Warningf("TOBIAS splitTrigger")
 	if !bytes.Equal(r.Desc().StartKey, split.UpdatedDesc.StartKey) ||
 		!bytes.Equal(r.Desc().EndKey, split.NewDesc.EndKey) {
 		return util.Errorf("range does not match splits: %s-%s + %s-%s != %s-%s", split.UpdatedDesc.StartKey,
@@ -915,6 +926,7 @@ func (r *Range) splitTrigger(batch engine.Engine, split *proto.SplitTrigger) err
 	if err != nil {
 		return util.Errorf("unable to compute stats for updated range after split: %s", err)
 	}
+
 	if err := r.stats.SetMVCCStats(batch, ms); err != nil {
 		return util.Errorf("unable to write MVCC stats: %s", err)
 	}
@@ -931,6 +943,7 @@ func (r *Range) splitTrigger(batch engine.Engine, split *proto.SplitTrigger) err
 	if err != nil {
 		return err
 	}
+	log.Warningf("TOBIAS NewRange done")
 
 	// Compute stats for new range.
 	iter = newRangeDataIterator(&split.NewDesc, batch)

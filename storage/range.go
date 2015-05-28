@@ -215,6 +215,7 @@ type Range struct {
 
 // NewRange initializes the range using the given metadata.
 func NewRange(desc *proto.RangeDescriptor, rm rangeManager) (*Range, error) {
+	log.Warningf("TOBIAS NewRange %+v", desc)
 	r := &Range{
 		rm:          rm,
 		cmdQ:        NewCommandQueue(),
@@ -432,7 +433,7 @@ func (r *Range) Desc() *proto.RangeDescriptor {
 
 // SetDesc atomically sets the range's descriptor. This method calls
 // processRangeDescriptorUpdate() to make the range manager handle the
-// descriptor update. Note that ProcessRangeDescriptorUpdate()
+// descriptor update. Note that processRangeDescriptorUpdate()
 // acquires the metaLock.
 //
 // This method should be called in the context of having metaLock held,
@@ -698,6 +699,7 @@ func (r *Range) addWriteCmd(ctx context.Context, args proto.Request, reply proto
 		} else if err == multiraft.ErrGroupDeleted {
 			// This error needs to be converted appropriately so that
 			// clients will retry.
+			panic("not me, not now")
 			err = proto.NewRangeNotFoundError(r.Desc().RaftID)
 		}
 		// As for reads, update timestamp cache with the timestamp

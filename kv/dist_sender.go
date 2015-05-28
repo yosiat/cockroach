@@ -586,14 +586,23 @@ func (ds *DistSender) Send(_ context.Context, call client.Call) {
 				ds.rangeCache.EvictCachedRangeDescriptor(args.Header().Key, desc)
 			}
 
+			// TODO(tschottdorf)
+			if rpcErr != nil {
+				err = util.Errorf("not retriable, what a shame")
+			}
+
 			if err != nil {
-				log.Warningf("failed to invoke %s: %s", call.Method(), err)
+				if call.Method() == proto.EndTransaction {
+					log.Warningf("failed to invoke %s: %s", call.Method(), err)
+					log.Warningf("TOBIAS DS fail: %+v", call)
+				}
 
 				// If retriable, allow retry. For range not found or range
 				// key mismatch errors, we don't backoff on the retry,
 				// but reset the backoff loop so we can retry immediately.
 				switch err.(type) {
 				case *proto.RangeNotFoundError, *proto.RangeKeyMismatchError:
+					//log.Warningf("TOBIAS EvictCachedRangeDescriptor %+v", desc)
 					// Range descriptor might be out of date - evict it.
 					ds.rangeCache.EvictCachedRangeDescriptor(args.Header().Key, desc)
 					// On addressing errors, don't backoff; retry immediately.
@@ -610,6 +619,8 @@ func (ds *DistSender) Send(_ context.Context, call client.Call) {
 					}
 				}
 				return retry.Break, err
+			} else if call.Method() == proto.EndTransaction {
+				log.Warningf("TOBIAS DS succeed: %s", call.Method(), args)
 			}
 
 			// If this request has a bound, such as MaxResults in

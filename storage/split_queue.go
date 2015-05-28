@@ -100,6 +100,7 @@ func (sq *splitQueue) process(now proto.Timestamp, rng *Range) error {
 	if err != nil {
 		return err
 	}
+	// TODO(tschottdorf) why not use sq.db.AdminSplit here?
 	if float64(rng.stats.GetSize())/float64(zone.RangeMaxBytes) > 1 {
 		if err = rng.AddCmd(rng.context(),
 			client.Call{
