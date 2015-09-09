@@ -1,26 +1,26 @@
 # About
-This document is an updated version of the original design documents
-by Spencer Kimball from early 2014.
+This is an updated version of the original design documents created
+by Spencer Kimball in early 2014.
 
 # Overview
 
-Cockroach is a distributed key:value datastore (SQL and structured
-data layers of cockroach have yet to be defined) which supports **ACID
+CockroachDB is a distributed key:value datastore (SQL and structured
+data layers of CockroachDB have yet to be defined) which supports **ACID
 transactional semantics** and **versioned values** as first-class
 features. The primary design goal is **global consistency and
-survivability**, hence the name. Cockroach aims to tolerate disk,
+survivability**, hence the name. CockroachDB aims to tolerate disk,
 machine, rack, and even **datacenter failures** with minimal latency
-disruption and **no manual intervention**. Cockroach nodes are
+disruption and **no manual intervention**. CockroachDB nodes (RoachNodes) are
 symmetric; a design goal is **homogenous deployment** (one binary) with
 minimal configuration.
 
-Cockroach implements a **single, monolithic sorted map** from key to
+CockroachDB implements a **single, monolithic sorted map** from key to
 value where both keys and values are byte strings (not unicode).
-Cockroach **scales linearly** (theoretically up to 4 exabytes (4E) of
+CockroachDB **scales linearly** (theoretically up to 4 exabytes (4E) of
 logical data). The map is composed of one or more ranges and each range
 is backed by data stored in [RocksDB](http://rocksdb.org/) (a
 variant of LevelDB), and is replicated to a total of three or more
-cockroach servers. Ranges are defined by start and end keys. Ranges are
+CockroachDB servers. Ranges are defined by start and end keys. Ranges are
 merged and split to maintain total byte size within a globally
 configurable min/max size interval. Range sizes default to target `64M` in
 order to facilitate quick splits and merges and to distribute load at
@@ -41,20 +41,20 @@ are guaranteed by Raft; this is the **fast commit path**. Otherwise, a
 **non-locking distributed commit** protocol is employed between affected
 ranges.
 
-Cockroach provides [snapshot isolation](http://en.wikipedia.org/wiki/Snapshot_isolation) (SI) and
+CockroachDB provides [snapshot isolation](http://en.wikipedia.org/wiki/Snapshot_isolation) (SI) and
 serializable snapshot isolation (SSI) semantics, allowing **externally
 consistent, lock-free reads and writes**--both from a historical
 snapshot timestamp and from the current wall clock time. SI provides
 lock-free reads and writes but still allows write skew. SSI eliminates
 write skew, but introduces a performance hit in the case of a
 contentious system. SSI is the default isolation; clients must
-consciously decide to trade correctness for performance. Cockroach
+consciously decide to trade correctness for performance. CockroachDB
 implements [a limited form of linearizability](#linearizability),
 providing ordering for any observer or chain of observers.
 
 Similar to
 [Spanner](http://static.googleusercontent.com/media/research.google.com/en/us/archive/spanner-osdi2012.pdf)
-directories, Cockroach allows configuration of arbitrary zones of data.
+directories, CockroacDB allows configuration of arbitrary zones of data.
 This allows replication factor, storage device type, and/or datacenter
 location to be chosen to optimize performance and/or availability.
 Unlike Spanner, zones are monolithic and don’t allow movement of fine
@@ -62,7 +62,7 @@ grained data on the level of entity groups.
 
 # Architecture
 
-Cockroach implements a layered architecture. The highest level of
+CockroachDB implements a layered architecture. The highest level of
 abstraction is the SQL layer (currently unspecified in this document).
 It depends directly on the [*structured data
 API*](#structured-data-api), which provides familiar relational concepts
@@ -70,7 +70,7 @@ such as schemas, tables, columns, and indexes. The structured data API
 in turn depends on the [distributed key value store](#key-value-api),
 which handles the details of range addressing to provide the abstraction
 of a single, monolithic key value store. The distributed KV store
-communicates with any number of physical cockroach nodes. Each node
+communicates with any number of physical RoachNodes. Each node
 contains one or more stores, one per physical device.
 
 ![Architecture](media/architecture.png)
@@ -87,7 +87,7 @@ Each physical node exports a RoachNode service. Each RoachNode exports
 one or more key ranges. RoachNodes are symmetric. Each has the same
 binary and assumes identical roles.
 
-Nodes and the ranges they provide access to can be arranged with various
+RoachNodes and the ranges they provide access to can be arranged with various
 physical network topologies to make trade offs between reliability and
 performance. For example, a triplicated (3-way replica) range could have
 each replica located on different:
@@ -99,15 +99,15 @@ each replica located on different:
 
 Up to `F` failures can be tolerated, where the total number of replicas `N = 2F + 1` (e.g. with 3x replication, one failure can be tolerated; with 5x replication, two failures, and so on).
 
-# Cockroach Client
+# CockroachDB Client
 
-In order to support diverse client usage, Cockroach clients connect to
+In order to support diverse client usage, CockroachDB clients connect to
 any node via HTTPS using protocol buffers or JSON. The connected node
 proxies involved client work including key lookups and write buffering.
 
 # Keys
 
-Cockroach keys are arbitrary byte arrays. If textual data is used in
+CockroachDB keys are arbitrary byte arrays. If textual data is used in
 keys, utf8 encoding is recommended (this helps for cleaner display of
 values in debugging tools). User-supplied keys are encoded using an
 ordered code. System keys are either prefixed with null characters (`\0`
@@ -118,7 +118,7 @@ used in system key prefixes to guarantee that they sort first.
 
 # Versioned Values
 
-Cockroach maintains historical versions of values by storing them with
+CockroachDB maintains historical versions of values by storing them with
 associated commit timestamps. Reads and scans can specify a snapshot
 time to return the most recent writes prior to the snapshot timestamp.
 Older versions of values are garbage collected by the system during
@@ -139,7 +139,7 @@ wall time + ε (ε = 99th percentile clock skew).
 
 # Lock-Free Distributed Transactions
 
-Cockroach provides distributed transactions without locks. Cockroach
+CockroachDB provides distributed transactions without locks. CockroacDB
 transactions support two isolation levels:
 
 - snapshot isolation (SI) and
@@ -148,7 +148,7 @@ transactions support two isolation levels:
 *SI* is simple to implement, highly performant, and correct for all but a
 handful of anomalous conditions (e.g. write skew). *SSI* requires just a touch
 more complexity, is still highly performant (less so with contention), and has
-no anomalous conditions. Cockroach’s SSI implementation is based on ideas from
+no anomalous conditions. CockroachDB’s SSI implementation is based on ideas from
 the literature and some possibly novel insights.
 
 SSI is the default level, with SI provided for application developers
@@ -157,7 +157,7 @@ write skew conditions to consciously elect to use it. In a lightly
 contended system, our implementation of SSI is just as performant as SI,
 requiring no locking or additional writes. With contention, our
 implementation of SSI still requires no locking, but will end up
-aborting more transactions. Cockroach’s SI and SSI implementations
+aborting more transactions. CockroachDB’s SI and SSI implementations
 prevent starvation scenarios even for arbitrarily long transactions.
 
 See the [Cahill paper](https://drive.google.com/file/d/0B9GCVTp_FHJIcEVyZVdDWEpYYXVVbFVDWElrYUV0NHFhU2Fv/edit?usp=sharing)
@@ -165,9 +165,9 @@ for one possible implementation of SSI. This is another [great paper](http://cs.
 For a discussion of SSI implemented by preventing read-write conflicts
 (in contrast to detecting them, called write-snapshot isolation), see
 the [Yabandeh paper](https://drive.google.com/file/d/0B9GCVTp_FHJIMjJ2U2t6aGpHLTFUVHFnMTRUbnBwc2pLa1RN/edit?usp=sharing),
-which is the source of much inspiration for Cockroach’s SSI.
+which is the source of much inspiration for CockroachDB’s SSI.
 
-Each Cockroach transaction is assigned a random priority and a
+Each CockroachDB transaction is assigned a random priority and a
 "candidate timestamp" at start. The candidate timestamp is the
 provisional timestamp at which the transaction will commit, and is
 chosen as the current clock time of the node coordinating the
@@ -183,7 +183,7 @@ timestamp to increase and the latter does not.
 
 **Hybrid Logical Clock**
 
-Each cockroach node maintains a hybrid logical clock (HLC) as discussed
+Each RoachNode maintains a hybrid logical clock (HLC) as discussed
 in the [Hybrid Logical Clock paper](http://www.cse.buffalo.edu/tech-reports/2014-04.pdf).
 HLC time uses timestamps which are composed of a physical component (thought of
 as and always close to local wall time) and a logical component (used to
@@ -197,10 +197,10 @@ the local HLC is attached.
 For a more in depth description of HLC please read the paper. Our
 implementation is [here](https://github.com/cockroachdb/cockroach/blob/master/util/hlc/hlc.go).
 
-Cockroach picks a Timestamp for a transaction using HLC time. Throughout this
+CockroachDB picks a Timestamp for a transaction using HLC time. Throughout this
 document, *timestamp* always refers to the HLC time which is a singleton
 on each node. The HLC is updated by every read/write event on the node, and
-the HLC time >= walltime. A read/write timestamp received in a cockroach request
+the HLC time >= walltime. A read/write timestamp received in a CockroachDB request
 from another node is not only used to version the operation, but also updates
 the HLC on the node. This is useful in guaranteeing that all data read/written
 on a node is at a timestamp < next HLC time.
@@ -430,7 +430,7 @@ accessing a single node is easy. The timestamp is assigned by the node
 itself, so it is guaranteed to be at a greater timestamp than all the
 existing timestamped data on the node.
 
-For multiple nodes, the timestamp of the node coordinating the
+For multiple RoachNodes, the timestamp of the node coordinating the
 transaction `t` is used. In addition, a maximum timestamp `t+ε` is
 supplied to provide an upper bound on timestamps for already-committed
 data (`ε` is the maximum clock skew). As the transaction progresses, any
@@ -467,7 +467,7 @@ apply to historical reads. An alternate approach which does not require
 retries makes a round to all node participants in advance and
 chooses the highest reported node wall time as the timestamp. However,
 knowing which nodes will be accessed in advance is difficult and
-potentially limiting. Cockroach could also potentially use a global
+potentially limiting. CockroachDB could also potentially use a global
 clock (Google did this with [Percolator](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Peng.pdf)),
 which would be feasible for smaller, geographically-proximate clusters.
 
@@ -486,7 +486,7 @@ the clock skew uncertainty interval to commit (`2ε`). See [*this
 article*](http://www.cs.cornell.edu/~ie53/publications/DC-col51-Sep13.pdf)
 for a helpful overview of Spanner’s concurrency control.
 
-Cockroach could make the same guarantees without specialized hardware,
+CockroachDB could make the same guarantees without specialized hardware,
 at the expense of longer wait times. If servers in the cluster were
 configured to work only with NTP, transaction wait times would likely to
 be in excess of 150ms. For wide-area zones, this would be somewhat
@@ -526,7 +526,7 @@ causality.
 
 Our contention is that causality is chiefly important from the
 perspective of a single client or a chain of successive clients (*if a
-tree falls in the forest and nobody hears…*). As such, Cockroach
+tree falls in the forest and nobody hears…*). As such, CockroachDB
 provides two mechanisms to provide linearizability for the vast majority
 of use cases without a mandatory transaction commit wait or an elaborate
 system to minimize clock skew.
@@ -542,7 +542,7 @@ system to minimize clock skew.
    same property even on client restart, and the wait will be
    mitigated by process initialization.
 
-   All causally-related events within Cockroach maintain
+   All causally-related events within CockroachDB maintain
    linearizability.
 
 2. Committed transactions respond with a commit wait parameter which
@@ -550,7 +550,7 @@ system to minimize clock skew.
    will typically be less than the full commit wait as the consensus
    write at the coordinator accounts for a portion of it.
 
-   Clients taking any action outside of another Cockroach transaction
+   Clients taking any action outside of another CockroachDB transaction
    (e.g. writing to another distributed system component) can either
    choose to wait the remaining interval before proceeding, or
    alternatively, pass the wait and/or commit timestamp to the
@@ -562,7 +562,7 @@ system to minimize clock skew.
    [AugmentedTime](http://www.cse.buffalo.edu/~demirbas/publications/augmentedTime.pdf)
    paper.
 
-Using these mechanisms in place of commit wait, Cockroach’s guarantee can be
+Using these mechanisms in place of commit wait, CockroachDB’s guarantee can be
 formulated as follows: any process which signals the start of transaction
 T<sub>2</sub> (T<sub>2</sub><sup>start</sup>) after the completion of
 transaction T<sub>1</sub> (T<sub>1</sub><sup>end</sup>), will have commit
@@ -612,7 +612,7 @@ for further details.
 
 # Node Storage
 
-Nodes maintain a separate instance of RocksDB for each disk. Each
+RoachNodes maintain a separate instance of RocksDB for each disk. Each
 RocksDB instance hosts any number of ranges. RPCs arriving at a
 RoachNode are multiplexed based on the disk name to the appropriate
 RocksDB instance. A single instance per disk is used to avoid
@@ -792,7 +792,7 @@ Raft elects a relatively long-lived leader which must be involved to
 propose commands. It heartbeats followers periodically and keeps their logs
 replicated. In the absence of heartbeats, followers become candidates
 after randomized election timeouts and proceed to hold new leader
-elections. Cockroach weights random timeouts such that the replicas with
+elections. CockroachDB weights random timeouts such that the replicas with
 shorter round trip times to peers are more likely to hold elections
 first (not implemented yet). Only the Raft leader may propose commands;
 followers will simply relay commands to the last known leader.
@@ -813,7 +813,7 @@ Raft group and execute commands from their shared commit log. Going through
 Raft is an expensive operation though, and there are tasks which should only be
 carried out by a single replica at a time (as opposed to all of them).
 
-For these reasons, Cockroach introduces the concept of **Range Leadership**:
+For these reasons, CockroachDB introduces the concept of **Range Leadership**:
 This is a lease held for a slice of (database, i.e. hybrid logical) time and is
 established by committing a special log entry through Raft containing the
 interval the leadership is going to be active on, along with the Node:RaftID
@@ -1017,7 +1017,7 @@ R0: `aa - cc`, R1: `*cc - lll`, R2: `*lll - llr`, R3: `*llr - nn`, R4: `*nn - rr
 
 ![Range Tree](media/rangetree.png)
 
-The range-spanning tree has many beneficial uses in Cockroach. It
+The range-spanning tree has many beneficial uses in CockroachDB. It
 provides a ready made solution to scheduling mappers and sorting /
 reducing during map-reduce operations. It also provides a mechanism
 for visiting every Raft replica range which comprises a logical key
