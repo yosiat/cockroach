@@ -20,6 +20,7 @@ package sql_test
 import (
 	"testing"
 
+	"github.com/cockroachdb/cockroach/config"
 	"github.com/cockroachdb/cockroach/sql"
 	"github.com/cockroachdb/cockroach/util/leaktest"
 )
@@ -28,6 +29,8 @@ import (
 // a rename operation.
 func TestRenameTable(t *testing.T) {
 	defer leaktest.AfterTest(t)
+	config.TestingDisableTableSplits = true
+	defer func() { config.TestingDisableTableSplits = false }()
 	s, sqlDB, kvDB := setup(t)
 	defer cleanup(s, sqlDB)
 

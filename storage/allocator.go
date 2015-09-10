@@ -103,7 +103,7 @@ func getUsedNodes(existing []proto.Replica) map[proto.NodeID]struct{} {
 // range, as governed by the supplied zone configuration. It returns the
 // required action that should be taken and a replica on which the action should
 // be performed.
-func (a *allocator) computeAction(zone config.ZoneConfig, desc *proto.RangeDescriptor) (
+func (a *allocator) computeAction(zone *config.ZoneConfig, desc *proto.RangeDescriptor) (
 	allocatorAction, float64) {
 	deadReplicas := a.storePool.deadReplicas(desc.Replicas)
 	if len(deadReplicas) > 0 {

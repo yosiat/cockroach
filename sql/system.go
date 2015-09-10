@@ -33,14 +33,14 @@ const (
 	// with special rules.
 	MaxReservedDescID ID = keys.MaxReservedDescID
 	// RootNamespaceID is the ID of the root namespace.
-	RootNamespaceID ID = 0
+	RootNamespaceID ID = keys.RootNamespaceID
 
 	// System IDs should remain <= MaxReservedDescID.
-	systemDatabaseID  ID = 1
-	namespaceTableID  ID = 2
-	descriptorTableID ID = 3
-	usersTableID      ID = 4
-	zonesTableID      ID = 5
+	systemDatabaseID  ID = keys.SystemDatabaseID
+	namespaceTableID  ID = keys.NamespaceTableID
+	descriptorTableID ID = keys.DescriptorTableID
+	usersTableID      ID = keys.UsersTableID
+	zonesTableID      ID = keys.ZonesTableID
 
 	// sql CREATE commands and full schema for each system table.
 	namespaceTableSchema = `
