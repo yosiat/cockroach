@@ -37,6 +37,23 @@ type subqueryVisitor struct {
 
 var _ parser.Visitor = &subqueryVisitor{}
 
+func appendValuesCopy(rows *parser.DTuple, values parser.DTuple) {
+	switch len(values) {
+	case 1:
+		// This seems hokey, but if we don't do this then the subquery expands
+		// to a tuple of tuples instead of a tuple of values and an expression
+		// like "k IN (SELECT foo FROM bar)" will fail because we're comparing
+		// a single value against a tuple.
+		*rows = append(*rows, values[0])
+	default:
+		// The result from plan.Values() is only valid until the next call to
+		// plan.Next(), so make a copy.
+		valuesCopy := make(parser.DTuple, len(values))
+		copy(valuesCopy, values)
+		*rows = append(*rows, valuesCopy)
+	}
+}
+
 func (v *subqueryVisitor) Visit(expr parser.Expr, pre bool) (parser.Visitor, parser.Expr) {
 	if v.err != nil {
 		return nil, expr
@@ -72,21 +89,7 @@ func (v *subqueryVisitor) Visit(expr parser.Expr, pre bool) (parser.Visitor, par
 	if multipleRows {
 		var rows parser.DTuple
 		for plan.Next() {
-			values := plan.Values()
-			switch len(values) {
-			case 1:
-				// This seems hokey, but if we don't do this then the subquery expands
-				// to a tuple of tuples instead of a tuple of values and an expression
-				// like "k IN (SELECT foo FROM bar)" will fail because we're comparing
-				// a single value against a tuple.
-				rows = append(rows, values[0])
-			default:
-				// The result from plan.Values() is only valid until the next call to
-				// plan.Next(), so make a copy.
-				valuesCopy := make(parser.DTuple, len(values))
-				copy(valuesCopy, values)
-				rows = append(rows, valuesCopy)
-			}
+			appendValuesCopy(&rows, plan.Values())
 		}
 		result = rows
 	} else {

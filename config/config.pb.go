@@ -14,12 +14,13 @@
 		PrefixConfigMap
 		PrefixConfig
 		ConfigUnion
+		ZoneDescriptor
+		DatabaseRegistry
 		SystemConfig
 */
 package config
 
 import proto "github.com/gogo/protobuf/proto"
-import math "math"
 import cockroach_proto "github.com/cockroachdb/cockroach/proto"
 import cockroach_proto1 "github.com/cockroachdb/cockroach/proto"
 
@@ -27,12 +28,14 @@ import cockroach_proto1 "github.com/cockroachdb/cockroach/proto"
 
 import github_com_cockroachdb_cockroach_proto "github.com/cockroachdb/cockroach/proto"
 
+import github_com_gogo_protobuf_sortkeys "github.com/gogo/protobuf/sortkeys"
+import errors "errors"
+
 import io "io"
 import fmt "fmt"
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
-var _ = math.Inf
 
 // GCPolicy defines garbage collection policies which apply to MVCC
 // values within a zone.
@@ -44,19 +47,12 @@ type GCPolicy struct {
 	// TTLSeconds specifies the maximum age of a value before it's
 	// garbage collected. Only older versions of values are garbage
 	// collected. Specifying <=0 mean older versions are never GC'd.
-	TTLSeconds int32 `protobuf:"varint,1,opt,name=ttl_seconds" json:"ttl_seconds"`
+	TTLSeconds int32 `protobuf:"varint,1,opt,name=ttl_seconds,proto3" json:"ttl_seconds,omitempty"`
 }
 
 func (m *GCPolicy) Reset()         { *m = GCPolicy{} }
 func (m *GCPolicy) String() string { return proto.CompactTextString(m) }
 func (*GCPolicy) ProtoMessage()    {}
-
-func (m *GCPolicy) GetTTLSeconds() int32 {
-	if m != nil {
-		return m.TTLSeconds
-	}
-	return 0
-}
 
 // ZoneConfig holds configuration that is needed for a range of KV pairs.
 type ZoneConfig struct {
@@ -64,8 +60,8 @@ type ZoneConfig struct {
 	// for each replica in the zone. The order in which the attributes are stored
 	// in ReplicaAttrs is arbitrary and may change.
 	ReplicaAttrs  []cockroach_proto.Attributes `protobuf:"bytes,1,rep,name=replica_attrs" json:"replica_attrs" yaml:"replicas,omitempty"`
-	RangeMinBytes int64                        `protobuf:"varint,2,opt,name=range_min_bytes" json:"range_min_bytes" yaml:"range_min_bytes,omitempty"`
-	RangeMaxBytes int64                        `protobuf:"varint,3,opt,name=range_max_bytes" json:"range_max_bytes" yaml:"range_max_bytes,omitempty"`
+	RangeMinBytes int64                        `protobuf:"varint,2,opt,name=range_min_bytes,proto3" json:"range_min_bytes,omitempty" yaml:"range_min_bytes,omitempty"`
+	RangeMaxBytes int64                        `protobuf:"varint,3,opt,name=range_max_bytes,proto3" json:"range_max_bytes,omitempty" yaml:"range_max_bytes,omitempty"`
 	// If GC policy is not set, uses the next highest, non-null policy
 	// in the zone config hierarchy, up to the default policy if necessary.
 	GC *GCPolicy `protobuf:"bytes,4,opt,name=gc" json:"gc,omitempty" yaml:"gc,omitempty"`
@@ -80,20 +76,6 @@ func (m *ZoneConfig) GetReplicaAttrs() []cockroach_proto.Attributes {
 		return m.ReplicaAttrs
 	}
 	return nil
-}
-
-func (m *ZoneConfig) GetRangeMinBytes() int64 {
-	if m != nil {
-		return m.RangeMinBytes
-	}
-	return 0
-}
-
-func (m *ZoneConfig) GetRangeMaxBytes() int64 {
-	if m != nil {
-		return m.RangeMaxBytes
-	}
-	return 0
 }
 
 func (m *ZoneConfig) GetGC() *GCPolicy {
@@ -130,27 +112,13 @@ func (m *PrefixConfigMap) GetConfigs() []PrefixConfig {
 // need to refer back to their parent prefix.
 // The Canonical key refers to this parent PrefixConfig by its prefix.
 type PrefixConfig struct {
-	Prefix    github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,1,opt,name=prefix,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"prefix,omitempty"`
-	Canonical github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,2,opt,name=canonical,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"canonical,omitempty"`
+	Prefix    github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,1,opt,name=prefix,proto3,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"prefix,omitempty"`
+	Canonical github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,2,opt,name=canonical,proto3,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"canonical,omitempty"`
 	Config    ConfigUnion                                `protobuf:"bytes,3,opt,name=config" json:"config"`
 }
 
 func (m *PrefixConfig) Reset()      { *m = PrefixConfig{} }
 func (*PrefixConfig) ProtoMessage() {}
-
-func (m *PrefixConfig) GetPrefix() github_com_cockroachdb_cockroach_proto.Key {
-	if m != nil {
-		return m.Prefix
-	}
-	return nil
-}
-
-func (m *PrefixConfig) GetCanonical() github_com_cockroachdb_cockroach_proto.Key {
-	if m != nil {
-		return m.Canonical
-	}
-	return nil
-}
 
 func (m *PrefixConfig) GetConfig() ConfigUnion {
 	if m != nil {
@@ -174,13 +142,89 @@ func (m *ConfigUnion) GetZone() *ZoneConfig {
 	return nil
 }
 
+// ZoneDescriptor holds a zone config and the span [start, end) it applies to.
+// []ZoneDescriptor implements the sort.Sort interface.
+type ZoneDescriptor struct {
+	Start github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,1,opt,name=start,proto3,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"start,omitempty"`
+	End   github_com_cockroachdb_cockroach_proto.Key `protobuf:"bytes,2,opt,name=end,proto3,casttype=github.com/cockroachdb/cockroach/proto.Key" json:"end,omitempty"`
+	Cfg   []byte                                     `protobuf:"bytes,3,opt,name=cfg,proto3" json:"cfg,omitempty"`
+}
+
+func (m *ZoneDescriptor) Reset()         { *m = ZoneDescriptor{} }
+func (m *ZoneDescriptor) String() string { return proto.CompactTextString(m) }
+func (*ZoneDescriptor) ProtoMessage()    {}
+
+// DatabaseRegistry holds information about a given database,
+// including a list of tables.
+type DatabaseRegistry struct {
+	Name   string            `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Tables map[string]uint32 `protobuf:"bytes,2,rep,name=tables" json:"tables" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+}
+
+func (m *DatabaseRegistry) Reset()         { *m = DatabaseRegistry{} }
+func (m *DatabaseRegistry) String() string { return proto.CompactTextString(m) }
+func (*DatabaseRegistry) ProtoMessage()    {}
+
+func (m *DatabaseRegistry) GetTables() map[string]uint32 {
+	if m != nil {
+		return m.Tables
+	}
+	return nil
+}
+
+// SystemConfig describes the SystemDBSpan in a nicely organized way.
+// TODO(marc): it's a bit redundant to have maps in both directions,
+// but we do need them for lookups.
+// TODO(marc): we should probably move sql/structured.proto elsewhere
+// and include the decoded descriptors here. They could also go into
+// DatabaseRegistry.
 type SystemConfig struct {
-	Values []cockroach_proto1.KeyValue `protobuf:"bytes,1,rep,name=values" json:"values"`
+	// Map of "database name" -> "database ID".
+	DatabaseNames map[string]uint32 `protobuf:"bytes,1,rep,name=database_names" json:"database_names" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	// Map of "database ID" -> "database registry".
+	Databases map[uint32]*DatabaseRegistry `protobuf:"bytes,2,rep,name=databases" json:"databases" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value"`
+	// Map of "object ID" -> "object descriptor". This includes
+	// both databases and tables.
+	Descriptors map[uint32][]byte `protobuf:"bytes,3,rep,name=descriptors" json:"descriptors" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	// Slice of zone config descriptors. These are sorted by keys.
+	// This is a sparse list. Any range not found in the list uses
+	// the default zone config.
+	Zones []ZoneDescriptor `protobuf:"bytes,4,rep,name=zones" json:"zones"`
+	// TODO(marc): remove when no longer needed.
+	Values []cockroach_proto1.KeyValue `protobuf:"bytes,5,rep,name=values" json:"values"`
 }
 
 func (m *SystemConfig) Reset()         { *m = SystemConfig{} }
 func (m *SystemConfig) String() string { return proto.CompactTextString(m) }
 func (*SystemConfig) ProtoMessage()    {}
+
+func (m *SystemConfig) GetDatabaseNames() map[string]uint32 {
+	if m != nil {
+		return m.DatabaseNames
+	}
+	return nil
+}
+
+func (m *SystemConfig) GetDatabases() map[uint32]*DatabaseRegistry {
+	if m != nil {
+		return m.Databases
+	}
+	return nil
+}
+
+func (m *SystemConfig) GetDescriptors() map[uint32][]byte {
+	if m != nil {
+		return m.Descriptors
+	}
+	return nil
+}
+
+func (m *SystemConfig) GetZones() []ZoneDescriptor {
+	if m != nil {
+		return m.Zones
+	}
+	return nil
+}
 
 func (m *SystemConfig) GetValues() []cockroach_proto1.KeyValue {
 	if m != nil {
@@ -204,9 +248,11 @@ func (m *GCPolicy) MarshalTo(data []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	data[i] = 0x8
-	i++
-	i = encodeVarintConfig(data, i, uint64(m.TTLSeconds))
+	if m.TTLSeconds != 0 {
+		data[i] = 0x8
+		i++
+		i = encodeVarintConfig(data, i, uint64(m.TTLSeconds))
+	}
 	return i, nil
 }
 
@@ -237,12 +283,16 @@ func (m *ZoneConfig) MarshalTo(data []byte) (int, error) {
 			i += n
 		}
 	}
-	data[i] = 0x10
-	i++
-	i = encodeVarintConfig(data, i, uint64(m.RangeMinBytes))
-	data[i] = 0x18
-	i++
-	i = encodeVarintConfig(data, i, uint64(m.RangeMaxBytes))
+	if m.RangeMinBytes != 0 {
+		data[i] = 0x10
+		i++
+		i = encodeVarintConfig(data, i, uint64(m.RangeMinBytes))
+	}
+	if m.RangeMaxBytes != 0 {
+		data[i] = 0x18
+		i++
+		i = encodeVarintConfig(data, i, uint64(m.RangeMaxBytes))
+	}
 	if m.GC != nil {
 		data[i] = 0x22
 		i++
@@ -302,16 +352,20 @@ func (m *PrefixConfig) MarshalTo(data []byte) (int, error) {
 	var l int
 	_ = l
 	if m.Prefix != nil {
-		data[i] = 0xa
-		i++
-		i = encodeVarintConfig(data, i, uint64(len(m.Prefix)))
-		i += copy(data[i:], m.Prefix)
+		if len(m.Prefix) > 0 {
+			data[i] = 0xa
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(m.Prefix)))
+			i += copy(data[i:], m.Prefix)
+		}
 	}
 	if m.Canonical != nil {
-		data[i] = 0x12
-		i++
-		i = encodeVarintConfig(data, i, uint64(len(m.Canonical)))
-		i += copy(data[i:], m.Canonical)
+		if len(m.Canonical) > 0 {
+			data[i] = 0x12
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(m.Canonical)))
+			i += copy(data[i:], m.Canonical)
+		}
 	}
 	data[i] = 0x1a
 	i++
@@ -352,6 +406,93 @@ func (m *ConfigUnion) MarshalTo(data []byte) (int, error) {
 	return i, nil
 }
 
+func (m *ZoneDescriptor) Marshal() (data []byte, err error) {
+	size := m.Size()
+	data = make([]byte, size)
+	n, err := m.MarshalTo(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (m *ZoneDescriptor) MarshalTo(data []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if m.Start != nil {
+		if len(m.Start) > 0 {
+			data[i] = 0xa
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(m.Start)))
+			i += copy(data[i:], m.Start)
+		}
+	}
+	if m.End != nil {
+		if len(m.End) > 0 {
+			data[i] = 0x12
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(m.End)))
+			i += copy(data[i:], m.End)
+		}
+	}
+	if m.Cfg != nil {
+		if len(m.Cfg) > 0 {
+			data[i] = 0x1a
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(m.Cfg)))
+			i += copy(data[i:], m.Cfg)
+		}
+	}
+	return i, nil
+}
+
+func (m *DatabaseRegistry) Marshal() (data []byte, err error) {
+	size := m.Size()
+	data = make([]byte, size)
+	n, err := m.MarshalTo(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
+func (m *DatabaseRegistry) MarshalTo(data []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if len(m.Name) > 0 {
+		data[i] = 0xa
+		i++
+		i = encodeVarintConfig(data, i, uint64(len(m.Name)))
+		i += copy(data[i:], m.Name)
+	}
+	if len(m.Tables) > 0 {
+		keysForTables := make([]string, 0, len(m.Tables))
+		for k := range m.Tables {
+			keysForTables = append(keysForTables, k)
+		}
+		github_com_gogo_protobuf_sortkeys.Strings(keysForTables)
+		for _, k := range keysForTables {
+			data[i] = 0x12
+			i++
+			v := m.Tables[k]
+			mapSize := 1 + len(k) + sovConfig(uint64(len(k))) + 1 + sovConfig(uint64(v))
+			i = encodeVarintConfig(data, i, uint64(mapSize))
+			data[i] = 0xa
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(k)))
+			i += copy(data[i:], k)
+			data[i] = 0x10
+			i++
+			i = encodeVarintConfig(data, i, uint64(v))
+		}
+	}
+	return i, nil
+}
+
 func (m *SystemConfig) Marshal() (data []byte, err error) {
 	size := m.Size()
 	data = make([]byte, size)
@@ -367,9 +508,92 @@ func (m *SystemConfig) MarshalTo(data []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.DatabaseNames) > 0 {
+		keysForDatabaseNames := make([]string, 0, len(m.DatabaseNames))
+		for k := range m.DatabaseNames {
+			keysForDatabaseNames = append(keysForDatabaseNames, k)
+		}
+		github_com_gogo_protobuf_sortkeys.Strings(keysForDatabaseNames)
+		for _, k := range keysForDatabaseNames {
+			data[i] = 0xa
+			i++
+			v := m.DatabaseNames[k]
+			mapSize := 1 + len(k) + sovConfig(uint64(len(k))) + 1 + sovConfig(uint64(v))
+			i = encodeVarintConfig(data, i, uint64(mapSize))
+			data[i] = 0xa
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(k)))
+			i += copy(data[i:], k)
+			data[i] = 0x10
+			i++
+			i = encodeVarintConfig(data, i, uint64(v))
+		}
+	}
+	if len(m.Databases) > 0 {
+		keysForDatabases := make([]uint32, 0, len(m.Databases))
+		for k := range m.Databases {
+			keysForDatabases = append(keysForDatabases, k)
+		}
+		github_com_gogo_protobuf_sortkeys.Uint32s(keysForDatabases)
+		for _, k := range keysForDatabases {
+			data[i] = 0x12
+			i++
+			v := m.Databases[k]
+			if v == nil {
+				return 0, errors.New("proto: map has nil element")
+			}
+			msgSize := v.Size()
+			mapSize := 1 + sovConfig(uint64(k)) + 1 + msgSize + sovConfig(uint64(msgSize))
+			i = encodeVarintConfig(data, i, uint64(mapSize))
+			data[i] = 0x8
+			i++
+			i = encodeVarintConfig(data, i, uint64(k))
+			data[i] = 0x12
+			i++
+			i = encodeVarintConfig(data, i, uint64(v.Size()))
+			n4, err := v.MarshalTo(data[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n4
+		}
+	}
+	if len(m.Descriptors) > 0 {
+		keysForDescriptors := make([]uint32, 0, len(m.Descriptors))
+		for k := range m.Descriptors {
+			keysForDescriptors = append(keysForDescriptors, k)
+		}
+		github_com_gogo_protobuf_sortkeys.Uint32s(keysForDescriptors)
+		for _, k := range keysForDescriptors {
+			data[i] = 0x1a
+			i++
+			v := m.Descriptors[k]
+			mapSize := 1 + sovConfig(uint64(k)) + 1 + len(v) + sovConfig(uint64(len(v)))
+			i = encodeVarintConfig(data, i, uint64(mapSize))
+			data[i] = 0x8
+			i++
+			i = encodeVarintConfig(data, i, uint64(k))
+			data[i] = 0x12
+			i++
+			i = encodeVarintConfig(data, i, uint64(len(v)))
+			i += copy(data[i:], v)
+		}
+	}
+	if len(m.Zones) > 0 {
+		for _, msg := range m.Zones {
+			data[i] = 0x22
+			i++
+			i = encodeVarintConfig(data, i, uint64(msg.Size()))
+			n, err := msg.MarshalTo(data[i:])
+			if err != nil {
+				return 0, err
+			}
+			i += n
+		}
+	}
 	if len(m.Values) > 0 {
 		for _, msg := range m.Values {
-			data[i] = 0xa
+			data[i] = 0x2a
 			i++
 			i = encodeVarintConfig(data, i, uint64(msg.Size()))
 			n, err := msg.MarshalTo(data[i:])
@@ -412,7 +636,9 @@ func encodeVarintConfig(data []byte, offset int, v uint64) int {
 func (m *GCPolicy) Size() (n int) {
 	var l int
 	_ = l
-	n += 1 + sovConfig(uint64(m.TTLSeconds))
+	if m.TTLSeconds != 0 {
+		n += 1 + sovConfig(uint64(m.TTLSeconds))
+	}
 	return n
 }
 
@@ -425,8 +651,12 @@ func (m *ZoneConfig) Size() (n int) {
 			n += 1 + l + sovConfig(uint64(l))
 		}
 	}
-	n += 1 + sovConfig(uint64(m.RangeMinBytes))
-	n += 1 + sovConfig(uint64(m.RangeMaxBytes))
+	if m.RangeMinBytes != 0 {
+		n += 1 + sovConfig(uint64(m.RangeMinBytes))
+	}
+	if m.RangeMaxBytes != 0 {
+		n += 1 + sovConfig(uint64(m.RangeMaxBytes))
+	}
 	if m.GC != nil {
 		l = m.GC.Size()
 		n += 1 + l + sovConfig(uint64(l))
@@ -451,11 +681,15 @@ func (m *PrefixConfig) Size() (n int) {
 	_ = l
 	if m.Prefix != nil {
 		l = len(m.Prefix)
-		n += 1 + l + sovConfig(uint64(l))
+		if l > 0 {
+			n += 1 + l + sovConfig(uint64(l))
+		}
 	}
 	if m.Canonical != nil {
 		l = len(m.Canonical)
-		n += 1 + l + sovConfig(uint64(l))
+		if l > 0 {
+			n += 1 + l + sovConfig(uint64(l))
+		}
 	}
 	l = m.Config.Size()
 	n += 1 + l + sovConfig(uint64(l))
@@ -472,9 +706,85 @@ func (m *ConfigUnion) Size() (n int) {
 	return n
 }
 
+func (m *ZoneDescriptor) Size() (n int) {
+	var l int
+	_ = l
+	if m.Start != nil {
+		l = len(m.Start)
+		if l > 0 {
+			n += 1 + l + sovConfig(uint64(l))
+		}
+	}
+	if m.End != nil {
+		l = len(m.End)
+		if l > 0 {
+			n += 1 + l + sovConfig(uint64(l))
+		}
+	}
+	if m.Cfg != nil {
+		l = len(m.Cfg)
+		if l > 0 {
+			n += 1 + l + sovConfig(uint64(l))
+		}
+	}
+	return n
+}
+
+func (m *DatabaseRegistry) Size() (n int) {
+	var l int
+	_ = l
+	l = len(m.Name)
+	if l > 0 {
+		n += 1 + l + sovConfig(uint64(l))
+	}
+	if len(m.Tables) > 0 {
+		for k, v := range m.Tables {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + len(k) + sovConfig(uint64(len(k))) + 1 + sovConfig(uint64(v))
+			n += mapEntrySize + 1 + sovConfig(uint64(mapEntrySize))
+		}
+	}
+	return n
+}
+
 func (m *SystemConfig) Size() (n int) {
 	var l int
 	_ = l
+	if len(m.DatabaseNames) > 0 {
+		for k, v := range m.DatabaseNames {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + len(k) + sovConfig(uint64(len(k))) + 1 + sovConfig(uint64(v))
+			n += mapEntrySize + 1 + sovConfig(uint64(mapEntrySize))
+		}
+	}
+	if len(m.Databases) > 0 {
+		for k, v := range m.Databases {
+			_ = k
+			_ = v
+			l = 0
+			if v != nil {
+				l = v.Size()
+			}
+			mapEntrySize := 1 + sovConfig(uint64(k)) + 1 + l + sovConfig(uint64(l))
+			n += mapEntrySize + 1 + sovConfig(uint64(mapEntrySize))
+		}
+	}
+	if len(m.Descriptors) > 0 {
+		for k, v := range m.Descriptors {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + sovConfig(uint64(k)) + 1 + len(v) + sovConfig(uint64(len(v)))
+			n += mapEntrySize + 1 + sovConfig(uint64(mapEntrySize))
+		}
+	}
+	if len(m.Zones) > 0 {
+		for _, e := range m.Zones {
+			l = e.Size()
+			n += 1 + l + sovConfig(uint64(l))
+		}
+	}
 	if len(m.Values) > 0 {
 		for _, e := range m.Values {
 			l = e.Size()
@@ -979,6 +1289,283 @@ func (m *ConfigUnion) Unmarshal(data []byte) error {
 
 	return nil
 }
+func (m *ZoneDescriptor) Unmarshal(data []byte) error {
+	l := len(data)
+	iNdEx := 0
+	for iNdEx < l {
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := data[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Start", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Start = append([]byte{}, data[iNdEx:postIndex]...)
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field End", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.End = append([]byte{}, data[iNdEx:postIndex]...)
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Cfg", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Cfg = append([]byte{}, data[iNdEx:postIndex]...)
+			iNdEx = postIndex
+		default:
+			var sizeOfWire int
+			for {
+				sizeOfWire++
+				wire >>= 7
+				if wire == 0 {
+					break
+				}
+			}
+			iNdEx -= sizeOfWire
+			skippy, err := skipConfig(data[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthConfig
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	return nil
+}
+func (m *DatabaseRegistry) Unmarshal(data []byte) error {
+	l := len(data)
+	iNdEx := 0
+	for iNdEx < l {
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := data[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Name", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Name = string(data[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Tables", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var keykey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				keykey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var stringLenmapkey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLenmapkey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLenmapkey := int(stringLenmapkey)
+			if intStringLenmapkey < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postStringIndexmapkey := iNdEx + intStringLenmapkey
+			if postStringIndexmapkey > l {
+				return io.ErrUnexpectedEOF
+			}
+			mapkey := string(data[iNdEx:postStringIndexmapkey])
+			iNdEx = postStringIndexmapkey
+			var valuekey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				valuekey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapvalue uint32
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapvalue |= (uint32(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if m.Tables == nil {
+				m.Tables = make(map[string]uint32)
+			}
+			m.Tables[mapkey] = mapvalue
+			iNdEx = postIndex
+		default:
+			var sizeOfWire int
+			for {
+				sizeOfWire++
+				wire >>= 7
+				if wire == 0 {
+					break
+				}
+			}
+			iNdEx -= sizeOfWire
+			skippy, err := skipConfig(data[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthConfig
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	return nil
+}
 func (m *SystemConfig) Unmarshal(data []byte) error {
 	l := len(data)
 	iNdEx := 0
@@ -999,6 +1586,298 @@ func (m *SystemConfig) Unmarshal(data []byte) error {
 		wireType := int(wire & 0x7)
 		switch fieldNum {
 		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DatabaseNames", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var keykey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				keykey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var stringLenmapkey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				stringLenmapkey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLenmapkey := int(stringLenmapkey)
+			if intStringLenmapkey < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postStringIndexmapkey := iNdEx + intStringLenmapkey
+			if postStringIndexmapkey > l {
+				return io.ErrUnexpectedEOF
+			}
+			mapkey := string(data[iNdEx:postStringIndexmapkey])
+			iNdEx = postStringIndexmapkey
+			var valuekey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				valuekey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapvalue uint32
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapvalue |= (uint32(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if m.DatabaseNames == nil {
+				m.DatabaseNames = make(map[string]uint32)
+			}
+			m.DatabaseNames[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Databases", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var keykey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				keykey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapkey uint32
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapkey |= (uint32(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var valuekey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				valuekey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapmsglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapmsglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if mapmsglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postmsgIndex := iNdEx + mapmsglen
+			if mapmsglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			if postmsgIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			mapvalue := &DatabaseRegistry{}
+			if err := mapvalue.Unmarshal(data[iNdEx:postmsgIndex]); err != nil {
+				return err
+			}
+			iNdEx = postmsgIndex
+			if m.Databases == nil {
+				m.Databases = make(map[uint32]*DatabaseRegistry)
+			}
+			m.Databases[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Descriptors", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var keykey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				keykey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapkey uint32
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapkey |= (uint32(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var valuekey uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				valuekey |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			var mapbyteLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				mapbyteLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intMapbyteLen := int(mapbyteLen)
+			if intMapbyteLen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postbytesIndex := iNdEx + intMapbyteLen
+			if postbytesIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			mapvalue := make([]byte, mapbyteLen)
+			copy(mapvalue, data[iNdEx:postbytesIndex])
+			iNdEx = postbytesIndex
+			if m.Descriptors == nil {
+				m.Descriptors = make(map[uint32][]byte)
+			}
+			m.Descriptors[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Zones", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := data[iNdEx]
+				iNdEx++
+				msglen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthConfig
+			}
+			postIndex := iNdEx + msglen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Zones = append(m.Zones, ZoneDescriptor{})
+			if err := m.Zones[len(m.Zones)-1].Unmarshal(data[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Values", wireType)
 			}
